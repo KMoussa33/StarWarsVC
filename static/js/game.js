@@ -8,6 +8,23 @@ class Game {
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x000000); // Set black background
         
+        // Flight control properties
+        this.velocity = new THREE.Vector3();
+        this.rotation = new THREE.Vector3();
+        this.keys = {};
+        this.maxSpeed = 1.0;           // Increased max speed
+        this.acceleration = 0.02;      // Faster acceleration
+        this.deceleration = 0.01;      // Faster deceleration
+        this.rotationSpeed = 0.05;     // Faster rotation
+        this.smoothing = 0.15;         // Rotation smoothing factor
+
+        // Weapon properties
+        this.lasers = [];
+        this.laserSpeed = 2;
+        this.lastFireTime = 0;
+        this.fireRate = 200;           // Milliseconds between shots
+        this.maxLasers = 100;         // Maximum number of lasers in the scene
+        
         // Use a wider FOV for better visibility
         this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
         
@@ -45,6 +62,204 @@ class Game {
         return Math.max(scaleFactor, 0.02); // Ensure minimum scale
     }
 
+    setupControls() {
+        // Add keyboard event listeners
+        document.addEventListener('keydown', (event) => this.handleKeyDown(event));
+        document.addEventListener('keyup', (event) => this.handleKeyUp(event));
+
+        // Add control instructions
+        const instructions = document.createElement('div');
+        instructions.style.position = 'absolute';
+        instructions.style.bottom = '20px';
+        instructions.style.left = '20px';
+        instructions.style.color = '#FFE81F';
+        instructions.style.fontFamily = 'Arial, sans-serif';
+        instructions.style.fontSize = '14px';
+        instructions.style.textShadow = '0 0 5px rgba(255, 232, 31, 0.5)';
+        instructions.innerHTML = `
+            Controls:<br>
+            W/S - Pitch up/down<br>
+            A/D - Roll left/right<br>
+            Q - Thrust<br>
+            E - Brake<br>
+            Space - Fire Lasers
+        `;
+        this.container.appendChild(instructions);
+    }
+
+    handleKeyDown(event) {
+        this.keys[event.key.toLowerCase()] = true;
+    }
+
+    handleKeyUp(event) {
+        this.keys[event.key.toLowerCase()] = false;
+    }
+
+    createLaser() {
+        // Create laser geometry
+        const laserGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.5, 8);
+        laserGeometry.rotateX(Math.PI / 2); // Rotate to point forward
+
+        // Create laser material with glow effect
+        const laserMaterial = new THREE.MeshBasicMaterial({
+            color: 0xFF0000,
+            transparent: true,
+            opacity: 0.8
+        });
+
+        const laser = new THREE.Mesh(laserGeometry, laserMaterial);
+        
+        // Add glow effect
+        const glowGeometry = new THREE.CylinderGeometry(0.04, 0.04, 0.5, 8);
+        glowGeometry.rotateX(Math.PI / 2);
+        const glowMaterial = new THREE.MeshBasicMaterial({
+            color: 0xFF0000,
+            transparent: true,
+            opacity: 0.3
+        });
+        const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+        laser.add(glow);
+
+        return laser;
+    }
+
+    fireLasers() {
+        if (!this.xwing) return;
+
+        const now = Date.now();
+        if (now - this.lastFireTime < this.fireRate) return;
+        this.lastFireTime = now;
+
+        // Create four lasers (one from each cannon)
+        const laserOffsets = [
+            new THREE.Vector3(-0.5, 0.2, 0),  // Top left
+            new THREE.Vector3(0.5, 0.2, 0),   // Top right
+            new THREE.Vector3(-0.5, -0.2, 0), // Bottom left
+            new THREE.Vector3(0.5, -0.2, 0)   // Bottom right
+        ];
+
+        laserOffsets.forEach(offset => {
+            const laser = this.createLaser();
+            
+            // Position laser at X-Wing's cannon positions
+            laser.position.copy(this.xwing.position);
+            laser.position.add(offset);
+            
+            // Apply X-Wing's rotation to laser
+            laser.rotation.copy(this.xwing.rotation);
+            
+            // Store laser velocity based on X-Wing's direction
+            laser.userData.velocity = new THREE.Vector3(0, 0, this.laserSpeed);
+            laser.userData.velocity.applyQuaternion(this.xwing.quaternion);
+            
+            this.scene.add(laser);
+            this.lasers.push(laser);
+
+            // Remove oldest laser if we exceed the maximum
+            if (this.lasers.length > this.maxLasers) {
+                const oldLaser = this.lasers.shift();
+                this.scene.remove(oldLaser);
+            }
+
+            // Add muzzle flash effect
+            this.createMuzzleFlash(laser.position);
+        });
+
+        // Play laser sound (to be added later)
+    }
+
+    createMuzzleFlash(position) {
+        const flashGeometry = new THREE.SphereGeometry(0.1, 8, 8);
+        const flashMaterial = new THREE.MeshBasicMaterial({
+            color: 0xFF0000,
+            transparent: true,
+            opacity: 1
+        });
+
+        const flash = new THREE.Mesh(flashGeometry, flashMaterial);
+        flash.position.copy(position);
+        this.scene.add(flash);
+
+        // Animate and remove the flash
+        const startTime = Date.now();
+        const animate = () => {
+            const elapsed = Date.now() - startTime;
+            if (elapsed < 50) {
+                flash.material.opacity = 1 - (elapsed / 50);
+                requestAnimationFrame(animate);
+            } else {
+                this.scene.remove(flash);
+            }
+        };
+        animate();
+    }
+
+    updateLasers() {
+        for (let i = this.lasers.length - 1; i >= 0; i--) {
+            const laser = this.lasers[i];
+            
+            // Move laser
+            laser.position.add(laser.userData.velocity);
+            
+            // Remove laser if it's too far away
+            if (laser.position.distanceTo(this.camera.position) > 1000) {
+                this.scene.remove(laser);
+                this.lasers.splice(i, 1);
+            }
+        }
+    }
+
+    updateFlightControls() {
+        if (!this.xwing) return;
+
+        // Thrust control (Q)
+        if (this.keys['q']) {
+            this.velocity.z -= this.acceleration;
+        }
+
+        // Brake (E)
+        if (this.keys['e']) {
+            this.velocity.z += this.deceleration * 2;
+        }
+
+        // Natural deceleration
+        this.velocity.z += this.velocity.z > 0 ? -this.deceleration : this.deceleration;
+
+        // Clamp velocity
+        this.velocity.z = Math.max(Math.min(this.velocity.z, this.maxSpeed), -this.maxSpeed);
+
+        // Apply pitch (W/S)
+        if (this.keys['w']) this.rotation.x -= this.rotationSpeed;
+        if (this.keys['s']) this.rotation.x += this.rotationSpeed;
+
+        // Apply roll (A/D)
+        if (this.keys['a']) this.rotation.z += this.rotationSpeed;
+        if (this.keys['d']) this.rotation.z -= this.rotationSpeed;
+
+        // Update position
+        this.xwing.position.z += this.velocity.z;
+
+        // Update rotation with smooth interpolation
+        this.xwing.rotation.x += (this.rotation.x - this.xwing.rotation.x) * this.smoothing;
+        this.xwing.rotation.y += (this.rotation.y - this.xwing.rotation.y) * this.smoothing;
+        this.xwing.rotation.z += (this.rotation.z - this.xwing.rotation.z) * this.smoothing;
+        
+        // No banking effect needed without yaw
+
+        // Update camera position to follow X-Wing with lag
+        const cameraTargetZ = this.xwing.position.z + 15;
+        this.camera.position.z += (cameraTargetZ - this.camera.position.z) * 0.1;
+        
+        // Update camera target with slight lag for smoother following
+        const targetPosition = this.xwing.position.clone();
+        this.controls.target.lerp(targetPosition, 0.1);
+        
+        // Add slight camera tilt during roll
+        if (this.keys['a']) this.camera.position.y += (2 - this.camera.position.y) * 0.05;
+        if (this.keys['d']) this.camera.position.y += (-2 - this.camera.position.y) * 0.05;
+        if (!this.keys['a'] && !this.keys['d']) this.camera.position.y += (0 - this.camera.position.y) * 0.05;
+    }
+
     init() {
         // Setup renderer
         this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -62,6 +277,9 @@ class Game {
 
         // Handle window resize
         window.addEventListener('resize', () => this.onWindowResize(), false);
+
+        // Setup flight controls
+        this.setupControls();
     }
 
     createScene() {
@@ -203,24 +421,26 @@ class Game {
         requestAnimationFrame(() => this.animate());
         
         const delta = this.clock.getDelta();
-        const elapsedTime = this.clock.getElapsedTime();
 
         // Animate stars slightly
         if (this.stars) {
             this.stars.rotation.y += delta * 0.05;
         }
 
-        // Enhanced X-Wing animation
-        if (this.xwing) {
-            // Gentle floating motion
-            this.xwing.position.y = Math.sin(elapsedTime * 0.5) * 0.1;
-            
-            // Subtle tilting
-            this.xwing.rotation.z = Math.sin(elapsedTime * 0.7) * 0.05;
-            this.xwing.rotation.x = Math.sin(elapsedTime * 0.4) * 0.05;
-            
-            // Very slight continuous rotation
-            this.xwing.rotation.y = Math.sin(elapsedTime * 0.2) * 0.1;
+        // Update flight controls
+        this.updateFlightControls();
+
+        // Update lasers
+        this.updateLasers();
+
+        // Fire lasers with spacebar
+        if (this.keys[' ']) {
+            this.fireLasers();
+        }
+
+        // Apply engine glow effect based on thrust
+        if (this.xwing && this.keys[' ']) {
+            // Add thrust visual feedback here in the future
         }
 
         this.controls.update();
