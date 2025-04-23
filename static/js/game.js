@@ -11,15 +11,16 @@ class Game {
         // Flight control properties
         this.velocity = new THREE.Vector3();
         this.rotation = new THREE.Vector3();
+        this.direction = new THREE.Vector3();
         this.keys = {};
-        this.maxSpeed = 1.0;           // Increased max speed
-        this.acceleration = 0.02;      // Faster acceleration
-        this.deceleration = 0.01;      // Faster deceleration
-        this.rotationSpeed = 0.03;     // Base rotation speed
-        this.yawSpeed = 0.02;          // Turning speed (slower than other rotations)
+        this.maxSpeed = 1.0;           // Maximum speed
+        this.acceleration = 0.02;      // Acceleration rate
+        this.deceleration = 0.01;      // Deceleration rate
+        this.yawSpeed = 0.02;          // Turning speed
         this.pitchSpeed = 0.03;        // Pitch speed
-        this.rollSpeed = 0.04;         // Roll speed (fastest rotation)
-        this.smoothing = 0.15;         // Rotation smoothing factor
+        this.rollSpeed = 0.04;         // Roll speed
+        this.smoothing = 0.15;         // Rotation smoothing
+        this.drag = 0.98;              // Velocity drag (less than 1 to slow down)
 
         // Weapon properties
         this.lasers = [];
@@ -216,56 +217,74 @@ class Game {
     updateFlightControls() {
         if (!this.xwing) return;
 
+        // Calculate forward direction based on current rotation
+        this.direction.set(0, 0, -1);
+        this.direction.applyQuaternion(this.xwing.quaternion);
+
         // Thrust control (Q)
         if (this.keys['q']) {
-            this.velocity.z -= this.acceleration;
+            // Add velocity in the direction we're facing
+            this.velocity.addScaledVector(this.direction, this.acceleration);
         }
 
         // Brake (E)
         if (this.keys['e']) {
-            this.velocity.z += this.deceleration * 2;
+            this.velocity.multiplyScalar(0.95); // Reduce velocity by 5%
         }
 
-        // Natural deceleration
-        this.velocity.z += this.velocity.z > 0 ? -this.deceleration : this.deceleration;
+        // Apply drag to slow down naturally
+        this.velocity.multiplyScalar(this.drag);
 
-        // Clamp velocity
-        this.velocity.z = Math.max(Math.min(this.velocity.z, this.maxSpeed), -this.maxSpeed);
+        // Clamp velocity magnitude
+        const speed = this.velocity.length();
+        if (speed > this.maxSpeed) {
+            this.velocity.multiplyScalar(this.maxSpeed / speed);
+        }
 
-        // Apply pitch (W/S) - moderate speed
+        // Apply pitch (W/S)
         if (this.keys['w']) this.rotation.x -= this.pitchSpeed;
         if (this.keys['s']) this.rotation.x += this.pitchSpeed;
 
-        // Apply yaw (turn left/right with A/D) - slower for better control
+        // Apply yaw (A/D)
         if (this.keys['a']) this.rotation.y += this.yawSpeed;
         if (this.keys['d']) this.rotation.y -= this.yawSpeed;
 
-        // Apply roll (Z/C) - faster for dynamic movement
+        // Apply roll (Z/C)
         if (this.keys['z']) this.rotation.z += this.rollSpeed;
         if (this.keys['c']) this.rotation.z -= this.rollSpeed;
 
-        // Update position
-        this.xwing.position.z += this.velocity.z;
+        // Update position based on velocity
+        this.xwing.position.add(this.velocity);
 
         // Update rotation with smooth interpolation
         this.xwing.rotation.x += (this.rotation.x - this.xwing.rotation.x) * this.smoothing;
         this.xwing.rotation.y += (this.rotation.y - this.xwing.rotation.y) * this.smoothing;
         this.xwing.rotation.z += (this.rotation.z - this.xwing.rotation.z) * this.smoothing;
-        
-        // No banking effect needed without yaw
 
-        // Update camera position to follow X-Wing with lag
-        const cameraTargetZ = this.xwing.position.z + 15;
-        this.camera.position.z += (cameraTargetZ - this.camera.position.z) * 0.1;
+        // Update camera to follow X-Wing with lag
+        const idealOffset = new THREE.Vector3(0, 3, 15);
+        const idealLookat = new THREE.Vector3(0, 0, -10);
         
-        // Update camera target with slight lag for smoother following
-        const targetPosition = this.xwing.position.clone();
-        this.controls.target.lerp(targetPosition, 0.1);
+        // Convert ideal offset to world space
+        const matrix = new THREE.Matrix4();
+        matrix.extractRotation(this.xwing.matrix);
         
-        // Add slight camera tilt during roll
-        if (this.keys['a']) this.camera.position.y += (2 - this.camera.position.y) * 0.05;
-        if (this.keys['d']) this.camera.position.y += (-2 - this.camera.position.y) * 0.05;
-        if (!this.keys['a'] && !this.keys['d']) this.camera.position.y += (0 - this.camera.position.y) * 0.05;
+        const offset = idealOffset.clone();
+        offset.applyMatrix4(matrix);
+        offset.add(this.xwing.position);
+        
+        const lookat = idealLookat.clone();
+        lookat.applyMatrix4(matrix);
+        lookat.add(this.xwing.position);
+        
+        // Smooth camera movement
+        this.camera.position.lerp(offset, 0.1);
+        this.controls.target.lerp(lookat, 0.1);
+        
+        // Allow camera to rotate freely
+        this.controls.enableDamping = true;
+        this.controls.dampingFactor = 0.05;
+        this.controls.rotateSpeed = 0.5;
     }
 
     init() {
@@ -273,15 +292,21 @@ class Game {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.container.appendChild(this.renderer.domElement);
 
-        // Setup camera - position further back for better view
-        this.camera.position.z = 15;
+        // Setup camera with better initial position
+        this.camera.position.set(0, 3, 15);
+        this.camera.lookAt(0, 0, 0);
 
-        // Setup controls
+        // Add orbit controls with enhanced settings
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
-        this.controls.maxDistance = 30;
-        this.controls.minDistance = 5;
+        this.controls.rotateSpeed = 0.5;
+        this.controls.enableZoom = false;     // Disable zoom for better control
+        this.controls.enablePan = false;      // Disable panning for better control
+        this.controls.maxPolarAngle = Math.PI; // Allow full vertical rotation
+        this.controls.minPolarAngle = 0;      // Allow full vertical rotation
+        this.controls.maxDistance = 20;       // Limit max distance
+        this.controls.minDistance = 10;       // Keep minimum distance
 
         // Handle window resize
         window.addEventListener('resize', () => this.onWindowResize(), false);
@@ -386,25 +411,29 @@ class Game {
             (gltf) => {
                 this.xwing = gltf.scene;
                 
+                // Reset X-Wing position and rotation (facing away from camera)
+                this.xwing.position.set(0, 0, 0);
+                this.xwing.rotation.set(0, 0, 0);  // Changed from Math.PI to 0 to face away
+                this.xwing.quaternion.setFromEuler(this.xwing.rotation);
+                
                 // Apply responsive scaling
                 const scale = this.calculateResponsiveScale();
                 this.xwing.scale.set(scale, scale, scale);
-                this.xwing.position.set(0, 0, 0); // Center position
-                
-                // Rotate model to face forward
-                this.xwing.rotation.set(0, Math.PI, 0);
                 
                 // Add the model to the scene
                 this.scene.add(this.xwing);
                 
-                // Setup better camera position - further back for better view
+                // Reset camera and controls
                 this.camera.position.set(0, 3, 15);
-                this.camera.lookAt(this.xwing.position);
+                this.camera.lookAt(0, 0, 0);
                 
-                // Adjust orbit controls
-                this.controls.target.copy(this.xwing.position);
-                this.controls.minDistance = 2;
-                this.controls.maxDistance = 10;
+                // Reset velocity and rotation
+                this.velocity.set(0, 0, 0);
+                this.rotation.set(0, 0, 0);  // Changed from Math.PI to 0 to face away
+                
+                // Center orbit controls
+                this.controls.target.set(0, 0, 0);
+                this.controls.update();
                 
                 // Add shadows
                 this.xwing.traverse((child) => {
