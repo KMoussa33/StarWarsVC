@@ -12,18 +12,14 @@ class Game {
         this.velocity = new THREE.Vector3();
         this.rotation = new THREE.Vector3();
         this.keys = {};
-        this.maxSpeed = 2.0;           // Increased max speed
-        this.acceleration = 0.03;      // Faster acceleration
-        this.deceleration = 0.015;      // Adjusted deceleration
-        this.rotationSpeed = 0.05;     // Faster rotation
+        this.maxSpeed = 1.0;           // Increased max speed
+        this.acceleration = 0.02;      // Faster acceleration
+        this.deceleration = 0.01;      // Faster deceleration
+        this.rotationSpeed = 0.03;     // Base rotation speed
+        this.yawSpeed = 0.02;          // Turning speed (slower than other rotations)
+        this.pitchSpeed = 0.03;        // Pitch speed
+        this.rollSpeed = 0.04;         // Roll speed (fastest rotation)
         this.smoothing = 0.15;         // Rotation smoothing factor
-
-        // Death Star properties
-        this.deathStarRadius = 1500;    // Even larger radius for better visibility at distance
-        this.deathStarSegments = 128;   // High detail sphere
-        this.trenchWidth = 20;          // Wider trench for better visibility
-        this.trenchDepth = 15;          // Deeper trench
-        this.surfaceDetail = 1.0;        // High surface detail
 
         // Weapon properties
         this.lasers = [];
@@ -86,7 +82,8 @@ class Game {
         instructions.innerHTML = `
             Controls:<br>
             W/S - Pitch up/down<br>
-            A/D - Roll left/right<br>
+            A/D - Turn left/right<br>
+            Z/C - Roll left/right<br>
             Q - Thrust<br>
             E - Brake<br>
             Space - Fire Lasers
@@ -235,13 +232,17 @@ class Game {
         // Clamp velocity
         this.velocity.z = Math.max(Math.min(this.velocity.z, this.maxSpeed), -this.maxSpeed);
 
-        // Apply pitch (W/S)
-        if (this.keys['w']) this.rotation.x -= this.rotationSpeed;
-        if (this.keys['s']) this.rotation.x += this.rotationSpeed;
+        // Apply pitch (W/S) - moderate speed
+        if (this.keys['w']) this.rotation.x -= this.pitchSpeed;
+        if (this.keys['s']) this.rotation.x += this.pitchSpeed;
 
-        // Apply roll (A/D)
-        if (this.keys['a']) this.rotation.z += this.rotationSpeed;
-        if (this.keys['d']) this.rotation.z -= this.rotationSpeed;
+        // Apply yaw (turn left/right with A/D) - slower for better control
+        if (this.keys['a']) this.rotation.y += this.yawSpeed;
+        if (this.keys['d']) this.rotation.y -= this.yawSpeed;
+
+        // Apply roll (Z/C) - faster for dynamic movement
+        if (this.keys['z']) this.rotation.z += this.rollSpeed;
+        if (this.keys['c']) this.rotation.z -= this.rollSpeed;
 
         // Update position
         this.xwing.position.z += this.velocity.z;
@@ -268,164 +269,25 @@ class Game {
     }
 
     init() {
-        // Setup renderer with improved shadows
+        // Setup renderer
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         this.container.appendChild(this.renderer.domElement);
 
-        // Setup camera with improved positioning and far plane for distant Death Star
-        this.camera.position.set(0, 10, 30);
-        this.camera.far = 20000;
-        this.camera.updateProjectionMatrix();
+        // Setup camera - position further back for better view
+        this.camera.position.z = 15;
 
-        // Setup controls with better constraints
+        // Setup controls
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
-        this.controls.maxDistance = 2000;
-        this.controls.minDistance = 10;
-        this.controls.maxPolarAngle = Math.PI * 0.8; // Prevent going too far below
-        this.controls.minPolarAngle = Math.PI * 0.2; // Prevent going too far above
-
-        // Create Death Star
-        this.createDeathStar();
+        this.controls.maxDistance = 30;
+        this.controls.minDistance = 5;
 
         // Handle window resize
         window.addEventListener('resize', () => this.onWindowResize(), false);
 
         // Setup flight controls
         this.setupControls();
-    }
-
-    createDeathStar() {
-        // Create main sphere geometry
-        const geometry = new THREE.SphereGeometry(this.deathStarRadius, this.deathStarSegments, this.deathStarSegments);
-        
-        // Create base material
-        const material = new THREE.MeshPhongMaterial({
-            color: 0x808080,
-            shininess: 10,
-            bumpScale: 0.5
-        });
-
-        // Create noise texture for surface details
-        const textureSize = 1024;
-        const canvas = document.createElement('canvas');
-        canvas.width = textureSize;
-        canvas.height = textureSize;
-        const ctx = canvas.getContext('2d');
-
-        // Generate noise pattern
-        for (let y = 0; y < textureSize; y++) {
-            for (let x = 0; x < textureSize; x++) {
-                const value = Math.random() * 255;
-                ctx.fillStyle = `rgb(${value},${value},${value})`;
-                ctx.fillRect(x, y, 1, 1);
-            }
-        }
-
-        // Create texture from canvas
-        const texture = new THREE.CanvasTexture(canvas);
-        material.bumpMap = texture;
-
-        // Create Death Star mesh
-        this.deathStar = new THREE.Mesh(geometry, material);
-        this.deathStar.position.set(0, 0, -this.deathStarRadius * 8); // Positioned much further ahead
-        this.deathStar.rotation.x = Math.PI * 0.1; // Slight tilt to show trench
-        this.scene.add(this.deathStar);
-
-        // Add slight fog for distance perception
-        this.scene.fog = new THREE.Fog(0x000000, this.deathStarRadius * 4, this.deathStarRadius * 8);
-
-        // Add ambient occlusion effect
-        const aoMap = new THREE.TextureLoader().load('/static/textures/noise.png');
-        material.aoMap = aoMap;
-        material.aoMapIntensity = 1.0;
-
-        // Enhance material properties
-        material.metalness = 0.7;
-        material.roughness = 0.6;
-
-        // Create superlaser dish
-        this.createSuperlaser();
-
-        // Create equatorial trench
-        this.createTrench();
-    }
-
-    createSuperlaser() {
-        // Create the main dish
-        const dishGeometry = new THREE.CircleGeometry(this.deathStarRadius * 0.15, 64);
-        const dishMaterial = new THREE.MeshPhongMaterial({
-            color: 0x222222,
-            side: THREE.DoubleSide,
-            emissive: 0x004400,
-            emissiveIntensity: 2,
-            metalness: 0.9,
-            roughness: 0.3
-        });
-
-        const dish = new THREE.Mesh(dishGeometry, dishMaterial);
-        dish.position.copy(this.deathStar.position);
-        dish.position.x += this.deathStarRadius;
-        dish.rotation.y = Math.PI / 2;
-
-        // Add concentric rings
-        const rings = 5;
-        for (let i = 0; i < rings; i++) {
-            const ringGeometry = new THREE.RingGeometry(
-                (this.deathStarRadius * 0.1) * (i / rings),
-                (this.deathStarRadius * 0.1) * ((i + 1) / rings),
-                32
-            );
-            const ringMaterial = new THREE.MeshPhongMaterial({
-                color: 0x666666,
-                side: THREE.DoubleSide,
-                emissive: 0x003300
-            });
-            const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-            ring.position.copy(dish.position);
-            ring.rotation.y = Math.PI / 2;
-            this.scene.add(ring);
-        }
-
-        this.scene.add(dish);
-    }
-
-    createTrench() {
-        // Create the equatorial trench
-        const trenchGeometry = new THREE.BoxGeometry(
-            this.deathStarRadius * 2,
-            this.trenchWidth,
-            this.trenchDepth
-        );
-        const trenchMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
-        const trench = new THREE.Mesh(trenchGeometry, trenchMaterial);
-        
-        trench.position.copy(this.deathStar.position);
-        this.scene.add(trench);
-
-        // Add trench details
-        const detailCount = 50;
-        for (let i = 0; i < detailCount; i++) {
-            const detailGeometry = new THREE.BoxGeometry(
-                this.trenchWidth,
-                this.trenchWidth,
-                this.trenchDepth
-            );
-            const detail = new THREE.Mesh(detailGeometry, trenchMaterial);
-            
-            // Position along the trench
-            const angle = (i / detailCount) * Math.PI * 2;
-            detail.position.copy(this.deathStar.position);
-            detail.position.x += Math.cos(angle) * this.deathStarRadius;
-            detail.position.z += Math.sin(angle) * this.deathStarRadius;
-            
-            // Rotate to face center
-            detail.lookAt(this.deathStar.position);
-            
-            this.scene.add(detail);
-        }
     }
 
     createScene() {
@@ -441,16 +303,29 @@ class Game {
         });
         
         const starVertices = [];
-        for(let i = 0; i < 2000; i++) {
-            const x = (Math.random() - 0.5) * 2000;
-            const y = (Math.random() - 0.5) * 2000;
-            const z = (Math.random() - 0.5) * 2000;
-            starVertices.push(x, y, z);
+        this.starSpread = 4000;  // Larger spread for more depth
+        const starCount = 8000;  // More stars
+        const layerCount = 4;    // Multiple layers for parallax effect
+        
+        // Create stars in layers for better depth effect
+        for (let layer = 0; layer < layerCount; layer++) {
+            const layerDepth = (layer / layerCount) * this.starSpread - this.starSpread/2;
+            const layerStars = Math.floor(starCount / layerCount);
+            
+            for (let i = 0; i < layerStars; i++) {
+                const x = Math.random() * this.starSpread - this.starSpread/2;
+                const y = Math.random() * this.starSpread - this.starSpread/2;
+                const z = layerDepth + Math.random() * (this.starSpread/layerCount) - this.starSpread/(layerCount*2);
+                starVertices.push(x, y, z);
+            }
         }
         
         starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starVertices, 3));
         this.stars = new THREE.Points(starGeometry, starMaterial);
         this.scene.add(this.stars);
+        
+        // Store original positions for reference
+        this.starsData = new Float32Array(starVertices);
 
         // Enhanced lighting setup
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
@@ -523,13 +398,13 @@ class Game {
                 this.scene.add(this.xwing);
                 
                 // Setup better camera position - further back for better view
-                this.camera.position.set(0, 5, 30);
+                this.camera.position.set(0, 3, 15);
                 this.camera.lookAt(this.xwing.position);
                 
                 // Adjust orbit controls
                 this.controls.target.copy(this.xwing.position);
-                this.controls.minDistance = 5;
-                this.controls.maxDistance = 100;
+                this.controls.minDistance = 2;
+                this.controls.maxDistance = 10;
                 
                 // Add shadows
                 this.xwing.traverse((child) => {
@@ -568,14 +443,28 @@ class Game {
         
         const delta = this.clock.getDelta();
 
-        // Animate stars slightly
-        if (this.stars) {
-            this.stars.rotation.y += delta * 0.05;
-        }
+        // Update star positions
+        if (this.stars && this.xwing) {
+            // Get the positions attribute
+            const positions = this.stars.geometry.attributes.position.array;
+            
+            // Update each star position
+            for (let i = 0; i < positions.length; i += 3) {
+                // Move stars relative to ship velocity
+                positions[i + 2] -= this.velocity.z;
 
-        // Rotate Death Star slowly
-        if (this.deathStar) {
-            this.deathStar.rotation.y += delta * 0.02;
+                // Wrap stars when they go too far behind
+                if (positions[i + 2] < -this.starSpread/2) {
+                    positions[i + 2] += this.starSpread;
+                }
+                // Wrap stars when they go too far ahead
+                else if (positions[i + 2] > this.starSpread/2) {
+                    positions[i + 2] -= this.starSpread;
+                }
+            }
+
+            // Flag the attribute for update
+            this.stars.geometry.attributes.position.needsUpdate = true;
         }
 
         // Update flight controls
@@ -590,7 +479,7 @@ class Game {
         }
 
         // Apply engine glow effect based on thrust
-        if (this.xwing && this.keys['q']) {
+        if (this.xwing && this.keys[' ']) {
             // Add thrust visual feedback here in the future
         }
 
